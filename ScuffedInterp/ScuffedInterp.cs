@@ -11,43 +11,40 @@ namespace ScuffedInterpolator
         public ScuffedInterp() : base()
         {
         }
-
-        private bool _extrapolation = false;
         private bool _isFirst = true;
-        private Vector2 _oldReport;
-        private Vector2 _newReport;
-
-        private Vector2 _interpPos;
-        private Vector2 _lerpStepVector;
-
-        private Vector2[] _newVector = new Vector2[2];
-        private Vector2[] _oldVector = new Vector2[1];
-
-        private Vector2 _newCompositeVector;
-
-        private Vector2 _interpTar;
-
-        //private float _relativePredictionError;
-
-        private float _interpStep = 1;
-        private float _extrapStep = 1;
-        private float _interpAmount = 1;
-        private int _stepUpdate = 1;
-
-        private double _deltaReport = 10;
-        private float _deltaReportFloat = 10;
-        private double _oldStep = 1;
+        private bool _extrapolation = false;
 
         private uint _pressure = 0;
 
-        [Property("interp/extrap amount"), DefaultPropertyValue(0.5f), ToolTip
+        private Vector2 _newReport;
+        private Vector2 _oldReport;
+
+        private Vector2 _interpPos;
+
+        private Vector2 _newVector;
+        private Vector2 _oldVector;
+
+        private Vector2 _newPredictionVector;
+
+        private Vector2 _lerpStepVector;
+
+        private float _interpAmount = 1;
+
+        private int _stepUpdate = 10;
+        private double _oldStep = 10;
+
+        private double _deltaReport = 10;
+        private float _deltaReportFloat = 10;
+
+        [Property("Interpolation amount"), DefaultPropertyValue(0.5f), ToolTip
         (
-        "0 predict full report ahead or negative (oh no)\n\n" +
-        "0.5 should feel same delay as no filter\n" +
-        "below 0.5 less delay, more scuffed. above 0.5 more delay, less scuffed\n" +
-        "1.5 may be similiar to bezier interp delay. "
+        "Smaller predicts more, bigger predicts less and acts like smoothing above 1." +
+        "0 predicts full report ahead. Average 0.5 reports ahead.\n" +
+        "0.5 should feel same delay as no filter, but more fucked up. Average about 0 reports behind.\n" +
+        "1 should be not fucked up at all, clean direct interpolation. About 1 reports behind.\n" +
+        "1.5 may be similiar to bezier interp delay. About 1.5 reports behind."
         )]
-        public float _getSetInterpAmount
+        public float _getSetScuffedInterpAmount
         {
             get { return _setInterpAmount; }
             set { _setInterpAmount = value; }
@@ -56,11 +53,12 @@ namespace ScuffedInterpolator
 
         [Property("Major cursor path correction"), DefaultPropertyValue(true), ToolTip
         (
-        "Always use prediction - even if you could interpolate\n" +
-        "is smoother but less loyal to real cursor position/path\n" +
-        "does not add delay, probably only a good thing"
+        "Always use prediction - even if you could interpolate.\n" +
+        "Is prettier, but less loyal to real cursor position/path.\n" +
+        "Disable to see if your settings are very fucked up.\n" +
+        "Only does something if Interpolation amount is between 0 and 1."
         )]
-        public bool _getAlwaysExtrap
+        public bool _getScuffedAlwaysExtrap
         {
             get { return _alwaysExtrap; }
             set { _alwaysExtrap = value; }
@@ -70,27 +68,30 @@ namespace ScuffedInterpolator
         [Property("Half-Step reports"), DefaultPropertyValue(true), ToolTip
         (
         "More reports, half step ones. Right when you get a tablet report\n\n" +
-        "next cycle does the remaining 'half step'\n" +
-        "good for 1000hz"
+        "Next cycle does the remaining 'half step'\n" +
+        "Good for 1000hz, 'free' extra reports without custom clock."
         )]
-        public bool _getHalfStepReports
+        public bool _getScuffedHalfStepReports
         {
             get { return _halfStepReports; }
             set { _halfStepReports = value; }
         }
         private bool _halfStepReports;
 
-        [Property("Pen lifting fix"), DefaultPropertyValue(5f), ToolTip
+        [Property("Pen lifting fix"), DefaultPropertyValue(4f), ToolTip
         (
-        "Mby don't change´this - 5 default\n" +
-        "For relative and other pen lifters\n" +
-        "No fucked up shit when lifting pen\n" +
-        "a big number disables it mostly, if pen bugs out after lifting try lower."
+        "4 default, 2 min\n" +
+        "How many tablet reports to 'miss' before resetting pen.\n" +
+        "If pen bugs out after lifting for a very short time, try lower value."
         )]
-        public float _getLiftResetDelay
+        public float _getScuffedLiftResetDelay
         {
             get { return _resetDelay; }
-            set { _resetDelay = value; }
+            set {
+                if(value > 2f)
+                    _resetDelay = value;
+                else
+                    _resetDelay = 2f; } 
         }
         private float _resetDelay;
 
@@ -103,16 +104,18 @@ namespace ScuffedInterpolator
 
                 if (_isFirst)
                 {
+                    _stepUpdate = (int)_deltaReport;
+
                     _pressure = tabletReport.Pressure;
                     _newReport = tabletReport.Position;
                     _oldReport = _newReport;
                     _interpPos = _oldReport;
-                    _newVector[0] = _newReport - _oldReport;
+                 
+                    _newVector = _newReport - _oldReport;
+                    _oldVector = _newVector;
 
-                    _stepUpdate = (int)_deltaReport;
-
-                    _oldVector[0] = _newVector[0];
-                    //_relativePredictionError = 1f;
+                    if (_setInterpAmount < 0 || _setInterpAmount >= 1f)
+                        _alwaysExtrap = false;
 
                     _isFirst = false;
                 }
@@ -125,63 +128,43 @@ namespace ScuffedInterpolator
                 _pressure = tabletReport.Pressure;
                 _oldReport = _newReport;
                 _newReport = tabletReport.Position;
-                _interpTar = _newReport;
-                _oldVector[0] = _newVector[0];
 
-                _newVector[0] = _newReport - _oldReport;
+                _oldVector = _newVector;
+                _newVector = _newReport - _oldReport;
 
-                _deltaReport = 0.995d * _deltaReport + 0.005d * _oldStep;
+                _deltaReport = 0.998d * _deltaReport + 0.002d * _oldStep;
                 _deltaReportFloat = (float)_deltaReport;
 
-                //System.Console.WriteLine("Delay in reports " + _interpAmount / _deltaReport + " Prediction error " + ((_newVector[0] - _oldVector[0] - _oldCompositeVector[0]).Length()) / _newVector[0].Length() + " Old error " + ((_newVector[0] - _oldVector[0] - _newVector[1]).Length()) / _newVector[0].Length() );
+                //System.Console.WriteLine("_alwaysExtrap " + _alwaysExtrap + " Prediction error " + ((_newVector[0] - _oldVector[0] - _oldCompositeVector[0]).Length()) / _newVector[0].Length() + " Old error " + ((_newVector[0] - _oldVector[0] - _newVector[1]).Length()) / _newVector[0].Length() );
 
-                _newVector[1] = _newVector[0] - _oldVector[0];
-
-                _newCompositeVector = _newVector[0] + _newVector[1];
+                _newPredictionVector = _newVector + _newVector - _oldVector;
 
                 _interpAmount = _deltaReportFloat * _setInterpAmount;
 
-                if (_interpAmount >= (_resetDelay - 1f) * _deltaReportFloat)
-                    _interpAmount = (_resetDelay - 1f) * _deltaReportFloat;
-                
-                _extrapStep = (1f / _deltaReportFloat);
-
-                if(_alwaysExtrap && _interpAmount > 0)
-                { 
-                    _extrapStep = 1f / (_deltaReportFloat + _interpAmount);
-                    _lerpStepVector = Vector2.Lerp(_interpPos, _newReport + _newCompositeVector, _extrapStep) - _interpPos;
+                if (_interpAmount < 0f || _alwaysExtrap) //Predict
+                {
+                    _lerpStepVector = (_newReport - _interpPos + _newPredictionVector * (1f - System.Convert.ToSingle(_alwaysExtrap == false) * _setInterpAmount)) / (_deltaReportFloat + System.Convert.ToSingle(_alwaysExtrap == true) * _interpAmount);
+                    
                     _interpPos = _interpPos + (_lerpStepVector / 2);
+
                     _extrapolation = true;
                 }
-                else if (_interpAmount <= 0f)
+                else if (_interpAmount >= 0.5f) //Half step is interpolation
                 {
-                    _lerpStepVector = Vector2.Lerp(_interpPos, _newReport + _newCompositeVector * (_deltaReportFloat - _interpAmount) / _deltaReportFloat, _extrapStep) - _interpPos;
-                    _interpPos = _interpPos + (_lerpStepVector / 2);
-                    _extrapolation = true;
-                }
-                else if (_interpAmount >= 1.0f)
-                {
+                    _lerpStepVector = (_newReport - _interpPos) / _interpAmount;
 
-                    _interpStep = 1f / _interpAmount;
-                    _lerpStepVector = Vector2.Lerp(_interpPos, _interpTar, _interpStep) - _interpPos;
                     _interpPos = _interpPos + (_lerpStepVector / 2);
                 }
-                else if (_interpAmount >= 0.5f)
+                else //Half step starts extrapolating
                 {
-
-                    _lerpStepVector = _interpTar - _interpPos;
-                    _lerpStepVector = _lerpStepVector / _interpAmount;
-                    _interpPos = _interpPos + (_lerpStepVector / 2);
-                }
-                else
-                {
-                    _interpPos = _interpTar;
-                    _lerpStepVector = Vector2.Lerp(_interpPos, _newReport + _newCompositeVector, _extrapStep) - _interpPos;
+                    _interpPos = _newReport;
+                    _lerpStepVector = (_newReport - _interpPos + _newPredictionVector) / _deltaReportFloat;
                     _interpPos = _interpPos + _lerpStepVector * (0.5f - _interpAmount);
 
                     _extrapolation = true;
                 }
                 tabletReport.Position = _interpPos;
+
                 if(_halfStepReports)
                     OnEmit();   
             }
@@ -195,40 +178,27 @@ namespace ScuffedInterpolator
         {
             if (State is ITabletReport tabletReport && PenIsInRange())
             {
-                
-                if ((float)(_stepUpdate + 1) >= _interpAmount && _extrapolation == false) //First cycle of extrapolation (third cycle if interp setting 2) - calculate extrapolation vector
+                if ((float)(_stepUpdate + 1) >= _interpAmount && _extrapolation == false) //Change from interpolation to extrapolation
                 {
                     _extrapolation = true;
 
-                    if (_stepUpdate != 0)
-                    {
-                        _interpPos = _interpPos + ((_interpAmount - (float)_stepUpdate) * _lerpStepVector);
+                    _interpPos = _interpPos + _lerpStepVector * (_interpAmount - 0.5f * System.Convert.ToSingle(_stepUpdate == 0) - (float)_stepUpdate);
 
-                        _lerpStepVector = Vector2.Lerp(_interpPos, _newReport + _newCompositeVector, _extrapStep) - _interpPos;
+                    _lerpStepVector = (_newReport - _interpPos + _newPredictionVector) / _deltaReportFloat;
 
-                        _interpPos = _interpPos + ((1f - (_interpAmount - (float)_stepUpdate)) * _lerpStepVector);
-                    }
-                    else
-                    {
-                        _interpPos = _interpPos + _lerpStepVector * (_interpAmount - 0.5f);
-
-                        _lerpStepVector = Vector2.Lerp(_interpPos, _newReport + _newCompositeVector, _extrapStep) - _interpPos;
-
-                        _interpPos = _interpPos + _lerpStepVector * (1.5f - _interpAmount);
-                    }
+                    _interpPos = _interpPos + _lerpStepVector * (1f + 0.5f * System.Convert.ToSingle(_stepUpdate == 0) + (float)_stepUpdate - _interpAmount);
                 }
-                else if (_stepUpdate != 0)
-                    _interpPos = _interpPos + _lerpStepVector; 
-                else
-                    _interpPos = _interpPos + _lerpStepVector / 2f; 
+                else //Do a step or half a step if right after a tablet report
+                    _interpPos = _interpPos + _lerpStepVector * (0.5f + 0.5f * System.Convert.ToSingle(_stepUpdate != 0));
 
                 tabletReport.Pressure = _pressure;
                 tabletReport.Position = _interpPos;
+
                 OnEmit();
-                
             }
             _stepUpdate++;
-            if(_stepUpdate > _resetDelay * (int)_deltaReportFloat)
+
+            if((float)_stepUpdate > _resetDelay * _deltaReportFloat)
             {                    
                 _pressure = 0;
                 _isFirst = true;
