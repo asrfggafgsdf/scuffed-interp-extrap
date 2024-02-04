@@ -12,10 +12,11 @@ namespace ScuffedInterpolator
         public ScuffedInterp() : base()
         {
         }
-        private bool _isFirst = true;
-        private bool _extrapolation = false;
+        private bool _initialise = true;
+        private bool _penLift;
+        private bool _extrapolation;
 
-        private uint _pressure = 0;
+        private uint _pressure;
 
         private Vector2 _newReport;
         private Vector2 _oldReport;
@@ -30,14 +31,18 @@ namespace ScuffedInterpolator
 
         private float _interpAmount;
 
-        private int _stepUpdate;
+        private float _alwaysExtrapTrue;
+        private float _alwaysExtrapFalse;
 
-        private double _deltaReport = 10;
-        private float _deltaReportFloat = 10;
+        private double _deltaReport;
+        private float _deltaReportFloat;
 
         private HPETDeltaStopwatch _consumeWatch = new HPETDeltaStopwatch(startRunning: false);
         private double _stepDelta;
         private float _stepOffset;
+
+        private float _firstStep;
+        private int _stepUpdate;
 
 
         [Property("Interpolation amount"), DefaultPropertyValue(0.5f), ToolTip
@@ -97,14 +102,57 @@ namespace ScuffedInterpolator
         }
         private float _resetDelay;
 
+        [Property("Tablet Hz"), DefaultPropertyValue(133f), ToolTip
+        (
+        "133 to 266, hmu if there's tablets with other values\n" +
+        "Used for initialisation, wrong value can make stuff not work"
+        )]
+        public float _getScuffedTabletHz
+        {
+            get { return _tabletHz; }
+            set
+            {
+                if (value > 266f)
+                    _tabletHz = 266f;
+                else if (value < 133f)
+                    _tabletHz = 133f;
+                else
+                    _tabletHz = value;
+            }
+        }
+        private float _tabletHz;
+
         public override PipelinePosition Position => PipelinePosition.PreTransform;
 
         protected override void ConsumeState()
         {
             if (State is ITabletReport tabletReport)
             {
+                if (_initialise)
+                {
+                    _stepDelta = (double)(1f / Frequency);
 
-                if (_isFirst)
+                    _deltaReport = (double)(Frequency / _tabletHz);
+
+                    _deltaReportFloat = (float)_deltaReport;
+
+                    if (_setInterpAmount < 0 || _setInterpAmount >= 1f || _alwaysExtrap == false)
+                    {
+                        _alwaysExtrapTrue = 0f;
+                        _alwaysExtrapFalse = 1f;
+                    }
+                    else if (_alwaysExtrap)
+                    {
+                        _alwaysExtrapTrue = 1f;
+                        _alwaysExtrapFalse = 0f;
+                    }
+
+                    _penLift = true;
+
+                    _initialise = false;
+                }
+
+                if (_penLift)
                 {
                     _stepUpdate = (int)_deltaReportFloat;
 
@@ -114,16 +162,10 @@ namespace ScuffedInterpolator
                     _interpPos = _oldReport;
 
                     _newVector = _newReport - _oldReport;
-                    _oldVector = _newVector;
-
-                    if (_setInterpAmount < 0 || _setInterpAmount >= 1f)
-                        _alwaysExtrap = false;
 
                     _consumeWatch.Start();
 
-                    _stepDelta = (double)(1f / Frequency);
-
-                    _isFirst = false;
+                    _penLift = false;
                 }
 
                 _extrapolation = false;
@@ -144,9 +186,9 @@ namespace ScuffedInterpolator
 
                 _interpAmount = _deltaReportFloat * _setInterpAmount + _stepOffset;
 
-                if (_setInterpAmount < 0f || _alwaysExtrap) //Predict
+                if (_setInterpAmount < 0f || _alwaysExtrapTrue == 1f) //Predict
                 {
-                    _lerpStepVector = (_newReport - _interpPos + _newPredictionVector * (1f - System.Convert.ToSingle(_alwaysExtrap == false) * (_interpAmount) / _deltaReportFloat)) / (_deltaReportFloat + System.Convert.ToSingle(_alwaysExtrap == true) * _interpAmount);
+                    _lerpStepVector = (_newReport - _interpPos + _newPredictionVector * (1f - _alwaysExtrapFalse * (_interpAmount) / _deltaReportFloat)) / (_deltaReportFloat + _alwaysExtrapTrue * _interpAmount);
 
                     _interpPos = _interpPos + _lerpStepVector * _stepOffset;
 
@@ -177,6 +219,7 @@ namespace ScuffedInterpolator
                 _deltaReport = 0.999d * _deltaReport + 0.001d * (double)_stepUpdate;
                 _deltaReportFloat = (float)_deltaReport;
                 _stepUpdate = 0;
+                _firstStep = 1f;
             }
             else
             {
@@ -192,18 +235,20 @@ namespace ScuffedInterpolator
                 {
                     _extrapolation = true;
 
-                    _interpPos = _interpPos + _lerpStepVector * (_interpAmount - _stepOffset * System.Convert.ToSingle(_stepUpdate == 0) - (float)_stepUpdate);
+                    _interpPos = _interpPos + _lerpStepVector * (_interpAmount - _stepOffset * _firstStep - (float)_stepUpdate);
 
                     _lerpStepVector = (_newReport - _interpPos + _newPredictionVector) / _deltaReportFloat;
 
-                    _interpPos = _interpPos + _lerpStepVector * (1f + _stepOffset * System.Convert.ToSingle(_stepUpdate == 0) + (float)_stepUpdate - _interpAmount); //closer look at if it works with _deltaOffset
+                    _interpPos = _interpPos + _lerpStepVector * (1f + _stepOffset * _firstStep + (float)_stepUpdate - _interpAmount); //It did work
                 }
                 else //Do a step or half a step if right after a tablet report
-                    _interpPos = _interpPos + _lerpStepVector * (1f - _stepOffset * System.Convert.ToSingle(_stepUpdate == 0));
+                    _interpPos = _interpPos + _lerpStepVector * (1f - _stepOffset * _firstStep);
 
                 tabletReport.Pressure = _pressure;
                 tabletReport.Position = _interpPos;
                 OnEmit();
+
+                _firstStep = 0f;
 
                 _stepDelta = 0.999d * _stepDelta + 0.001d * _consumeWatch.Restart().TotalMilliseconds;
             }
@@ -213,7 +258,7 @@ namespace ScuffedInterpolator
             {
                 _consumeWatch.Stop();
                 _pressure = 0;
-                _isFirst = true;
+                _penLift = true;
             }
         }
     }
